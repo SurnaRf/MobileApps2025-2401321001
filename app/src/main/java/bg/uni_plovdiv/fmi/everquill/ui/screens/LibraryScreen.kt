@@ -1,5 +1,6 @@
 package bg.uni_plovdiv.fmi.everquill.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -19,6 +21,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,6 +53,8 @@ import bg.uni_plovdiv.fmi.everquill.data.entity.BookStatus
 fun LibraryScreen(
     books: List<Book>,
     onAddBookClick: () -> Unit,
+    onNavigateToSearch: () -> Unit,
+    onBookClick: (Book) -> Unit,
     onUpdateProgress: (String, Int) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -80,19 +86,35 @@ fun LibraryScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Header
-            Column {
-                Text(
-                    text = "My Library",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "Your collection of magical tomes and scrolls.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "My Library",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Your collection of magical tomes and scrolls.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = onNavigateToSearch,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.Search, contentDescription = "Search Online", modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Search API", color = MaterialTheme.colorScheme.onSecondary, style = MaterialTheme.typography.labelMedium)
+                }
             }
 
             // Search Bar
@@ -168,7 +190,7 @@ fun LibraryScreen(
                     contentPadding = PaddingValues(bottom = 80.dp)
                 ) {
                     items(filteredBooks, key = { it.id }) { book ->
-                        BookCard(book = book, onUpdateProgress = onUpdateProgress)
+                        BookCard(book = book, onClick = { onBookClick(book) }, onUpdateProgress = onUpdateProgress)
                     }
                 }
             }
@@ -179,10 +201,13 @@ fun LibraryScreen(
 @Composable
 fun BookCard(
     book: Book,
+    onClick: () -> Unit,
     onUpdateProgress: (String, Int) -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface

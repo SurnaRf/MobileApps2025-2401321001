@@ -13,7 +13,12 @@ data class Book(
     val author: String,
     val totalPages: Int,
     val currentPage: Int,
-    val status: BookStatus
+    val status: BookStatus,
+    val dateAdded: Long = System.currentTimeMillis(),
+    val coverUrl: String? = null,
+    val publisher: String? = null,
+    val genre: String? = null,
+    val publishYear: Int? = null
 ) {
     val progressPercent: Float
         get() = if (totalPages > 0) (currentPage.toFloat() / totalPages.toFloat()).coerceIn(0f, 1f) else 0f

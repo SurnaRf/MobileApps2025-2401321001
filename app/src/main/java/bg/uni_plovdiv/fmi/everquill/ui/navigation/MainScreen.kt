@@ -23,10 +23,12 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import bg.uni_plovdiv.fmi.everquill.ui.screens.AchievementsScreen
 import bg.uni_plovdiv.fmi.everquill.ui.screens.AddBookDialog
+import bg.uni_plovdiv.fmi.everquill.ui.screens.BookDetailScreen
 import bg.uni_plovdiv.fmi.everquill.ui.screens.HomeScreen
 import bg.uni_plovdiv.fmi.everquill.ui.screens.LibraryScreen
 import bg.uni_plovdiv.fmi.everquill.ui.screens.ReadingScreen
 import bg.uni_plovdiv.fmi.everquill.ui.screens.RecordSessionDialog
+import bg.uni_plovdiv.fmi.everquill.ui.screens.SearchBooksScreen
 import bg.uni_plovdiv.fmi.everquill.viewmodel.MainViewModel
 
 sealed class Screen(val route: String, val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
@@ -44,6 +46,8 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
     val achievements by viewModel.achievements.collectAsState()
 
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
+    var showSearchScreen by remember { mutableStateOf(false) }
+    var selectedBookId by remember { mutableStateOf<String?>(null) }
 
     var showAddBookDialog by remember { mutableStateOf(false) }
     var showRecordSessionDialog by remember { mutableStateOf(false) }
@@ -58,17 +62,19 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.onSurface
-            ) {
-                screens.forEach { screen ->
-                    NavigationBarItem(
-                        icon = { Icon(screen.icon, contentDescription = screen.title) },
-                        label = { Text(screen.title) },
-                        selected = currentScreen == screen,
-                        onClick = { currentScreen = screen }
-                    )
+            if (!showSearchScreen && selectedBookId == null) {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface
+                ) {
+                    screens.forEach { screen ->
+                        NavigationBarItem(
+                            icon = { Icon(screen.icon, contentDescription = screen.title) },
+                            label = { Text(screen.title) },
+                            selected = currentScreen == screen,
+                            onClick = { currentScreen = screen }
+                        )
+                    }
                 }
             }
         }
@@ -78,29 +84,54 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            when (currentScreen) {
-                Screen.Home -> HomeScreen(
-                    userProfile = userProfile,
-                    quests = quests,
-                    books = books,
-                    onNavigateToLibrary = { currentScreen = Screen.Library },
-                    onNavigateToReading = { currentScreen = Screen.Reading },
-                    onToggleQuest = { viewModel.toggleQuest(it) }
+            val selectedBook = books.find { it.id == selectedBookId }
+            when {
+                selectedBook != null -> BookDetailScreen(
+                    book = selectedBook,
+                    onBackClick = { selectedBookId = null },
+                    onUpdateStatus = { status ->
+                        viewModel.updateBookDetails(selectedBook.id, selectedBook.title, selectedBook.author, selectedBook.totalPages, status)
+                    },
+                    onUpdateDetails = { title, author, totalPages, status ->
+                        viewModel.updateBookDetails(selectedBook.id, title, author, totalPages, status)
+                    },
+                    onDeleteBook = {
+                        viewModel.deleteBook(selectedBook.id)
+                        selectedBookId = null
+                    }
                 )
-                Screen.Library -> LibraryScreen(
-                    books = books,
-                    onAddBookClick = { showAddBookDialog = true },
-                    onUpdateProgress = { bookId, page -> viewModel.updateBookProgress(bookId, page) }
+                showSearchScreen -> SearchBooksScreen(
+                    existingBooks = books,
+                    onBackClick = { showSearchScreen = false }
                 )
-                Screen.Reading -> ReadingScreen(
-                    userProfile = userProfile,
-                    books = books,
-                    onRecordSessionClick = { showRecordSessionDialog = true },
-                    onNavigateToLibrary = { currentScreen = Screen.Library }
-                )
-                Screen.Achievements -> AchievementsScreen(
-                    achievements = achievements
-                )
+                else -> {
+                    when (currentScreen) {
+                        Screen.Home -> HomeScreen(
+                            userProfile = userProfile,
+                            quests = quests,
+                            books = books,
+                            onNavigateToLibrary = { currentScreen = Screen.Library },
+                            onNavigateToReading = { currentScreen = Screen.Reading },
+                            onToggleQuest = { viewModel.toggleQuest(it) }
+                        )
+                        Screen.Library -> LibraryScreen(
+                            books = books,
+                            onAddBookClick = { showAddBookDialog = true },
+                            onNavigateToSearch = { showSearchScreen = true },
+                            onBookClick = { book -> selectedBookId = book.id },
+                            onUpdateProgress = { bookId, page -> viewModel.updateBookProgress(bookId, page) }
+                        )
+                        Screen.Reading -> ReadingScreen(
+                            userProfile = userProfile,
+                            books = books,
+                            onRecordSessionClick = { showRecordSessionDialog = true },
+                            onNavigateToLibrary = { currentScreen = Screen.Library }
+                        )
+                        Screen.Achievements -> AchievementsScreen(
+                            achievements = achievements
+                        )
+                    }
+                }
             }
         }
     }

@@ -1,243 +1,241 @@
 package bg.uni_plovdiv.fmi.everquill.data.repository
 
+import android.content.Context
+import android.util.Log
+import bg.uni_plovdiv.fmi.everquill.data.database.AppDatabase
+import bg.uni_plovdiv.fmi.everquill.data.database.entity.BookEntity
+import bg.uni_plovdiv.fmi.everquill.data.database.entity.ReadingSessionEntity
+import bg.uni_plovdiv.fmi.everquill.data.database.entity.UserProfileEntity
 import bg.uni_plovdiv.fmi.everquill.data.entity.Achievement
 import bg.uni_plovdiv.fmi.everquill.data.entity.Book
 import bg.uni_plovdiv.fmi.everquill.data.entity.BookStatus
 import bg.uni_plovdiv.fmi.everquill.data.entity.Quest
 import bg.uni_plovdiv.fmi.everquill.data.entity.UserProfile
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
-class ReadingRepository {
+class ReadingRepository(context: Context) {
+    private val database = AppDatabase.getDatabase(context)
+    private val bookDao = database.bookDao()
+    private val readingSessionDao = database.readingSessionDao()
+    private val questDao = database.questDao()
+    private val achievementDao = database.achievementDao()
+    private val userProfileDao = database.userProfileDao()
 
-    private val _userProfile = MutableStateFlow(UserProfile(name = "Reader", level = 1, currentXp = 40, maxXpForNextLevel = 100, pagesReadToday = 15, streakDays = 3))
-    val userProfile: StateFlow<UserProfile> = _userProfile.asStateFlow()
+    private val externalScope = CoroutineScope(Dispatchers.IO)
 
-    private val _books = MutableStateFlow(
-        listOf(
-            Book(
-                id = "1",
-                title = "The Fellowship of the Ring",
-                author = "J.R.R. Tolkien",
-                totalPages = 423,
-                currentPage = 120,
-                status = BookStatus.READING
-            ),
-            Book(
-                id = "2",
-                title = "Dune",
-                author = "Frank Herbert",
-                totalPages = 412,
-                currentPage = 0,
-                status = BookStatus.TO_READ
-            )
-        )
-    )
-    val books: StateFlow<List<Book>> = _books.asStateFlow()
+    val books: StateFlow<List<Book>> = bookDao.getAllBooks()
+        .map { entities -> entities.map { it.toDomain() } }
+        .stateIn(externalScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _quests = MutableStateFlow(
-        listOf(
-            Quest(
-                id = "q1",
-                title = "Read 20 pages today",
-                rewardXp = 50,
-                isCompleted = false
-            ),
-            Quest(
-                id = "q2",
-                title = "Open your library journal",
-                rewardXp = 20,
-                isCompleted = true
-            )
-        )
-    )
-    val quests: StateFlow<List<Quest>> = _quests.asStateFlow()
+    val userProfile: StateFlow<UserProfile> = userProfileDao.getUserProfile()
+        .map { entity -> entity?.toDomain() ?: UserProfile() }
+        .stateIn(externalScope, SharingStarted.WhileSubscribed(5000), UserProfile())
 
-    private val _achievements = MutableStateFlow(
-        listOf(
-            Achievement(
-                id = "a1",
-                title = "First Steps",
-                description = "Read your first page",
-                isUnlocked = true,
-                progress = 1.0f,
-                progressText = "Unlocked"
-            ),
-            Achievement(
-                id = "a2",
-                title = "Bookworm",
-                description = "Read 100 pages",
-                isUnlocked = true,
-                progress = 1.0f,
-                progressText = "120 / 100 pages"
-            ),
-            Achievement(
-                id = "a3",
-                title = "Getting Started",
-                description = "Complete your first book",
-                isUnlocked = false,
-                progress = 0.0f,
-                progressText = "0 / 1 books"
-            ),
-            Achievement(
-                id = "a4",
-                title = "Dedicated Reader",
-                description = "Read for 7 consecutive days",
-                isUnlocked = false,
-                progress = 3f / 7f,
-                progressText = "3 / 7 days"
-            )
-        )
-    )
-    val achievements: StateFlow<List<Achievement>> = _achievements.asStateFlow()
+    val quests: StateFlow<List<Quest>> = questDao.getDailyQuests()
+        .map { entities -> entities.map { it.toDomain() } }
+        .stateIn(externalScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun addBook(title: String, author: String, totalPages: Int, currentPage: Int, status: BookStatus) {
-        val newBook = Book(
-            id = UUID.randomUUID().toString(),
-            title = title,
-            author = author,
-            totalPages = totalPages,
-            currentPage = currentPage.coerceIn(0, totalPages),
-            status = status
-        )
-        _books.update { current -> listOf(newBook) + current }
+    val achievements: StateFlow<List<Achievement>> = achievementDao.getAllAchievements()
+        .map { entities -> entities.map { it.toDomain() } }
+        .stateIn(externalScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun getSessionsForBook(bookId: String): Flow<List<ReadingSessionEntity>> {
+        return readingSessionDao.getSessionsForBook(bookId)
     }
 
-    fun updateBookProgress(bookId: String, newCurrentPage: Int) {
-        _books.update { current ->
-            current.map { book ->
-                if (book.id == bookId) {
-                    val clampedPage = newCurrentPage.coerceIn(0, book.totalPages)
-                    val newStatus = if (clampedPage >= book.totalPages && book.totalPages > 0) BookStatus.COMPLETED else book.status
-                    book.copy(currentPage = clampedPage, status = newStatus)
-                } else {
-                    book
-                }
-            }
+    suspend fun addBook(
+        title: String,
+        author: String,
+        totalPages: Int,
+        currentPage: Int,
+        status: BookStatus,
+        coverUrl: String? = null,
+        publisher: String? = null,
+        genre: String? = null,
+        publishYear: Int? = null
+    ) {
+        withContext(Dispatchers.IO) {
+            Log.d("BookMetadataDebug", "Repo addBook received publisher: $publisher, genre: $genre, publishYear: $publishYear")
+            val clampedPage = currentPage.coerceIn(0, totalPages)
+            val finalStatus = if (clampedPage >= totalPages && totalPages > 0) BookStatus.COMPLETED else status
+            val newBook = BookEntity(
+                id = UUID.randomUUID().toString(),
+                title = title.trim(),
+                author = author.trim(),
+                totalPages = totalPages,
+                currentPage = clampedPage,
+                status = finalStatus,
+                coverUrl = coverUrl,
+                publisher = publisher,
+                genre = genre,
+                publishYear = publishYear
+            )
+            Log.d("BookMetadataDebug", "Saved BookEntity publisher: ${newBook.publisher}, genre: ${newBook.genre}, publishYear: ${newBook.publishYear}")
+            bookDao.insertBook(newBook)
+            updateAchievementsSync()
         }
     }
 
-    fun recordReadingSession(bookId: String, pagesRead: Int) {
+    suspend fun updateBookProgress(bookId: String, newCurrentPage: Int) {
+        withContext(Dispatchers.IO) {
+            val book = bookDao.getBookById(bookId) ?: return@withContext
+            val clampedPage = newCurrentPage.coerceIn(0, book.totalPages)
+            val newStatus = if (clampedPage >= book.totalPages && book.totalPages > 0) BookStatus.COMPLETED else book.status
+            val updated = book.copy(currentPage = clampedPage, status = newStatus)
+            bookDao.updateBook(updated)
+            updateAchievementsSync()
+        }
+    }
+
+    suspend fun updateBookDetails(bookId: String, title: String, author: String, totalPages: Int, status: BookStatus) {
+        withContext(Dispatchers.IO) {
+            val book = bookDao.getBookById(bookId) ?: return@withContext
+            val clampedPage = book.currentPage.coerceAtMost(totalPages)
+            val updated = book.copy(
+                title = title.trim(),
+                author = author.trim(),
+                totalPages = totalPages,
+                currentPage = clampedPage,
+                status = status
+            )
+            bookDao.updateBook(updated)
+            updateAchievementsSync()
+        }
+    }
+
+    suspend fun deleteBook(bookId: String) {
+        withContext(Dispatchers.IO) {
+            val book = bookDao.getBookById(bookId) ?: return@withContext
+            bookDao.deleteBook(book)
+            updateAchievementsSync()
+        }
+    }
+
+    suspend fun recordReadingSession(bookId: String, pagesRead: Int) {
         if (pagesRead <= 0) return
-        
-        // Update book progress
-        var actualPagesRead = pagesRead
-        _books.update { current ->
-            current.map { book ->
-                if (book.id == bookId) {
-                    val newPage = (book.currentPage + pagesRead).coerceAtMost(book.totalPages)
-                    actualPagesRead = newPage - book.currentPage
-                    val newStatus = if (newPage >= book.totalPages && book.totalPages > 0) BookStatus.COMPLETED else BookStatus.READING
-                    book.copy(currentPage = newPage, status = newStatus)
-                } else {
-                    book
-                }
-            }
-        }
+        withContext(Dispatchers.IO) {
+            val book = bookDao.getBookById(bookId) ?: return@withContext
+            val startPage = book.currentPage
+            val endPage = (startPage + pagesRead).coerceAtMost(book.totalPages)
+            val actualPagesRead = endPage - startPage
+            if (actualPagesRead <= 0) return@withContext
 
-        if (actualPagesRead <= 0) return
+            val newStatus = if (endPage >= book.totalPages && book.totalPages > 0) BookStatus.COMPLETED else book.status
+            val updatedBook = book.copy(currentPage = endPage, status = newStatus)
+            bookDao.updateBook(updatedBook)
 
-        // Add XP (10 XP per page read)
-        val xpGained = actualPagesRead * 10
-        _userProfile.update { profile ->
-            var newXp = profile.currentXp + xpGained
+            val xpEarned = actualPagesRead * 10
+            readingSessionDao.insertSession(
+                ReadingSessionEntity(
+                    bookId = bookId,
+                    pagesRead = actualPagesRead,
+                    startPage = startPage,
+                    endPage = endPage,
+                    xpEarned = xpEarned
+                )
+            )
+
+            var profile = userProfileDao.getUserProfileSync() ?: UserProfileEntity(
+                id = 1, name = "Reader", level = 1, currentXp = 0, maxXpForNextLevel = 100, pagesReadToday = 0, streakDays = 1, lastReadingDate = System.currentTimeMillis()
+            )
+
+            var newXp = profile.currentXp + xpEarned
             var newLevel = profile.level
             var maxLevelXp = profile.maxXpForNextLevel
-            
+
             while (newXp >= maxLevelXp) {
                 newXp -= maxLevelXp
                 newLevel += 1
-                maxLevelXp += 100 // Scale next level requirement
+                maxLevelXp += 100
             }
 
-            profile.copy(
+            val newPagesToday = profile.pagesReadToday + actualPagesRead
+            profile = profile.copy(
                 level = newLevel,
                 currentXp = newXp,
                 maxXpForNextLevel = maxLevelXp,
-                pagesReadToday = profile.pagesReadToday + actualPagesRead
+                pagesReadToday = newPagesToday
             )
-        }
+            userProfileDao.updateUserProfile(profile)
 
-        // Check quest completion if daily pages >= 20
-        _quests.update { quests ->
-            quests.map { quest ->
-                if (quest.id == "q1" && !quest.isCompleted) {
-                    val currentPagesToday = _userProfile.value.pagesReadToday
-                    if (currentPagesToday >= 20) {
-                        // Grant bonus XP for quest
-                        _userProfile.update { p ->
-                            var xp = p.currentXp + quest.rewardXp
-                            var lvl = p.level
-                            var maxXp = p.maxXpForNextLevel
-                            if (xp >= maxXp) {
-                                xp -= maxXp
-                                lvl += 1
-                                maxXp += 100
-                            }
-                            p.copy(level = lvl, currentXp = xp, maxXpForNextLevel = maxXp)
-                        }
-                        quest.copy(isCompleted = true)
-                    } else {
-                        quest
+            // Update quest q1 ("Read 20 pages today")
+            val quest1 = questDao.getQuestById("q1")
+            if (quest1 != null && !quest1.isCompleted) {
+                val updatedProgress = (quest1.currentProgress + actualPagesRead).coerceAtMost(quest1.targetPages)
+                val isCompleted = updatedProgress >= quest1.targetPages
+                questDao.insertOrUpdateQuest(
+                    quest1.copy(currentProgress = updatedProgress, isCompleted = isCompleted)
+                )
+                if (isCompleted) {
+                    var xp = profile.currentXp + quest1.xpReward
+                    var lvl = profile.level
+                    var maxXp = profile.maxXpForNextLevel
+                    if (xp >= maxXp) {
+                        xp -= maxXp
+                        lvl += 1
+                        maxXp += 100
                     }
-                } else {
-                    quest
+                    userProfileDao.updateUserProfile(
+                        profile.copy(level = lvl, currentXp = xp, maxXpForNextLevel = maxXp)
+                    )
                 }
             }
-        }
 
-        // Update achievements progress
-        _achievements.update { achievements ->
-            achievements.map { ach ->
-                when (ach.id) {
-                    "a2" -> { // Bookworm (100 pages total across books)
-                        val totalPagesRead = _books.value.sumOf { it.currentPage }
-                        val prog = (totalPagesRead.toFloat() / 100f).coerceIn(0f, 1f)
-                        ach.copy(
-                            isUnlocked = totalPagesRead >= 100,
-                            progress = prog,
-                            progressText = "${totalPagesRead} / 100 pages"
-                        )
-                    }
-                    "a3" -> { // Getting Started (Complete 1 book)
-                        val completedBooks = _books.value.count { it.status == BookStatus.COMPLETED }
-                        val prog = (completedBooks.toFloat() / 1f).coerceIn(0f, 1f)
-                        ach.copy(
-                            isUnlocked = completedBooks >= 1,
-                            progress = prog,
-                            progressText = "$completedBooks / 1 books"
-                        )
-                    }
-                    else -> ach
+            updateAchievementsSync()
+        }
+    }
+
+    suspend fun toggleQuest(questId: String) {
+        withContext(Dispatchers.IO) {
+            val quest = questDao.getQuestById(questId) ?: return@withContext
+            val newState = !quest.isCompleted
+            val updatedQuest = quest.copy(isCompleted = newState, currentProgress = if (newState) quest.targetPages else quest.currentProgress)
+            questDao.insertOrUpdateQuest(updatedQuest)
+
+            if (newState) {
+                val profile = userProfileDao.getUserProfileSync() ?: return@withContext
+                var xp = profile.currentXp + quest.xpReward
+                var lvl = profile.level
+                var maxXp = profile.maxXpForNextLevel
+                while (xp >= maxXp) {
+                    xp -= maxXp
+                    lvl += 1
+                    maxXp += 100
                 }
+                userProfileDao.updateUserProfile(
+                    profile.copy(level = lvl, currentXp = xp, maxXpForNextLevel = maxXp)
+                )
             }
         }
     }
 
-    fun toggleQuest(questId: String) {
-        _quests.update { quests ->
-            quests.map { quest ->
-                if (quest.id == questId) {
-                    val newState = !quest.isCompleted
-                    if (newState) {
-                        _userProfile.update { p ->
-                            var xp = p.currentXp + quest.rewardXp
-                            var lvl = p.level
-                            var maxXp = p.maxXpForNextLevel
-                            if (xp >= maxXp) {
-                                xp -= maxXp
-                                lvl += 1
-                                maxXp += 100
-                            }
-                            p.copy(level = lvl, currentXp = xp, maxXpForNextLevel = maxXp)
-                        }
-                    }
-                    quest.copy(isCompleted = newState)
-                } else {
-                    quest
+    private suspend fun updateAchievementsSync() {
+        val allBooks = bookDao.getAllBooksSync()
+        val totalPagesRead = allBooks.sumOf { it.currentPage }
+        val completedBooks = allBooks.count { it.status == BookStatus.COMPLETED }
+
+        val achievements = achievementDao.getAllAchievementsSync()
+        for (ach in achievements) {
+            when (ach.id) {
+                "a2" -> { // Bookworm (100 pages)
+                    val unlocked = totalPagesRead >= 100
+                    achievementDao.updateAchievement(
+                        ach.copy(currentProgress = totalPagesRead, isUnlocked = unlocked)
+                    )
+                }
+                "a3" -> { // Getting Started (1 book completed)
+                    val unlocked = completedBooks >= 1
+                    achievementDao.updateAchievement(
+                        ach.copy(currentProgress = completedBooks, isUnlocked = unlocked)
+                    )
                 }
             }
         }

@@ -1,7 +1,9 @@
 package bg.uni_plovdiv.fmi.everquill.data.repository
 
 import android.content.Context
+import androidx.room.withTransaction
 import bg.uni_plovdiv.fmi.everquill.data.database.AppDatabase
+import bg.uni_plovdiv.fmi.everquill.data.database.entity.AchievementEntity
 import bg.uni_plovdiv.fmi.everquill.data.database.entity.BookEntity
 import bg.uni_plovdiv.fmi.everquill.data.database.entity.ReadingSessionEntity
 import bg.uni_plovdiv.fmi.everquill.data.database.entity.UserProfileEntity
@@ -17,6 +19,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -84,6 +87,12 @@ class ReadingRepository(context: Context) {
 
     val allSessions: StateFlow<List<ReadingSessionEntity>> = readingSessionDao.getAllSessions()
         .stateIn(externalScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    init {
+        externalScope.launch {
+            updateAchievementsSync(suppressXp = true)
+        }
+    }
 
     fun getSessionsForBook(bookId: String): Flow<List<ReadingSessionEntity>> {
         return readingSessionDao.getSessionsForBook(bookId)
@@ -214,7 +223,7 @@ class ReadingRepository(context: Context) {
                 val genres = book.genre.split(",")
                     .map { it.trim().lowercase(Locale.getDefault()).replaceFirstChar { c -> c.uppercase() } }
                     .filter { it.isNotBlank() }
-                    .toSet() // each book counts at most once per normalized genre
+                    .toSet()
                 for (genre in genres) {
                     genreCounts[genre] = (genreCounts[genre] ?: 0) + 1
                 }
@@ -309,7 +318,7 @@ class ReadingRepository(context: Context) {
                 publishYear = publishYear
             )
             bookDao.insertBook(newBook)
-            updateAchievementsSync()
+            updateAchievementsSync(suppressXp = false)
         }
     }
 
@@ -320,7 +329,7 @@ class ReadingRepository(context: Context) {
             val newStatus = if (clampedPage >= book.totalPages && book.totalPages > 0) BookStatus.COMPLETED else book.status
             val updated = book.copy(currentPage = clampedPage, status = newStatus)
             bookDao.updateBook(updated)
-            updateAchievementsSync()
+            updateAchievementsSync(suppressXp = false)
         }
     }
 
@@ -336,7 +345,7 @@ class ReadingRepository(context: Context) {
                 status = status
             )
             bookDao.updateBook(updated)
-            updateAchievementsSync()
+            updateAchievementsSync(suppressXp = false)
         }
     }
 
@@ -344,7 +353,7 @@ class ReadingRepository(context: Context) {
         withContext(Dispatchers.IO) {
             val book = bookDao.getBookById(bookId) ?: return@withContext
             bookDao.deleteBook(book)
-            updateAchievementsSync()
+            updateAchievementsSync(suppressXp = false)
         }
     }
 
@@ -423,61 +432,148 @@ class ReadingRepository(context: Context) {
                 }
             }
 
-            updateAchievementsSync()
+            updateAchievementsSync(suppressXp = false)
         }
     }
 
     suspend fun toggleQuest(questId: String) {
-        withContext(Dispatchers.IO) {
-            val quest = questDao.getQuestById(questId) ?: return@withContext
+        database.withTransaction {
+            val quest = questDao.getQuestById(questId) ?: return@withTransaction
             val newState = !quest.isCompleted
-            val updatedQuest = quest.copy(isCompleted = newState, currentProgress = if (newState) quest.targetPages else quest.currentProgress)
+
+            var shouldAwardXp = false
+            val newRewardClaimed = if (newState && !quest.rewardClaimed) {
+                shouldAwardXp = true
+                true
+            } else {
+                quest.rewardClaimed
+            }
+
+            val updatedQuest = quest.copy(
+                isCompleted = newState,
+                rewardClaimed = newRewardClaimed,
+                currentProgress = if (newState) quest.targetPages else quest.currentProgress
+            )
             questDao.insertOrUpdateQuest(updatedQuest)
 
-            if (newState) {
-                val profile = userProfileDao.getUserProfileSync() ?: return@withContext
-                var xp = profile.currentXp + quest.xpReward
-                var lvl = profile.level
-                var maxXp = profile.maxXpForNextLevel
-                while (xp >= maxXp) {
-                    xp -= maxXp
-                    lvl += 1
-                    maxXp += 100
+            if (shouldAwardXp) {
+                val profile = userProfileDao.getUserProfileSync()
+                if (profile != null) {
+                    var xp = profile.currentXp + quest.xpReward
+                    var lvl = profile.level
+                    var maxXp = profile.maxXpForNextLevel
+                    while (xp >= maxXp) {
+                        xp -= maxXp
+                        lvl += 1
+                        maxXp += 100
+                    }
+                    userProfileDao.updateUserProfile(
+                        profile.copy(level = lvl, currentXp = xp, maxXpForNextLevel = maxXp)
+                    )
                 }
-                userProfileDao.updateUserProfile(
-                    profile.copy(level = lvl, currentXp = xp, maxXpForNextLevel = maxXp)
-                )
             }
         }
     }
 
-    private suspend fun updateAchievementsSync() {
-        val allBooks = bookDao.getAllBooksSync()
-        val totalPagesRead = allBooks.sumOf { it.currentPage }
-        val completedBooks = allBooks.count { it.status == BookStatus.COMPLETED }
+    private fun getDefaultAchievements(): List<AchievementEntity> {
+        return listOf(
+            AchievementEntity("a1", "First Steps", "Complete your first book", "READING_MILESTONES", "COMMON", 25, 1, 0, false, null, false),
+            AchievementEntity("a2", "Page Turner", "Read 250 total pages", "READING_MILESTONES", "RARE", 50, 250, 0, false, null, false),
+            AchievementEntity("a5", "Bibliophile", "Read 1,000 total pages", "READING_MILESTONES", "LEGENDARY", 250, 1000, 0, false, null, false),
+            AchievementEntity("a3", "Getting Started", "Complete your first reading session", "READING_HABITS", "COMMON", 25, 1, 0, false, null, false),
+            AchievementEntity("a6", "Marathon Reader", "Read at least 50 pages in a single reading session", "READING_HABITS", "RARE", 50, 50, 0, false, null, false),
+            AchievementEntity("a7", "Night Owl", "Complete a reading session starting at or after 22:00", "READING_HABITS", "RARE", 50, 1, 0, false, null, false),
+            AchievementEntity("a8", "Consistent Reader", "Maintain a 3-day reading streak", "DEDICATION", "COMMON", 25, 3, 0, false, null, false),
+            AchievementEntity("a4", "Dedicated Reader", "Maintain a 7-day reading streak", "DEDICATION", "EPIC", 100, 7, 0, false, null, false),
+            AchievementEntity("a9", "Committed Scholar", "Maintain a 14-day reading streak", "DEDICATION", "LEGENDARY", 250, 14, 0, false, null, false),
+            AchievementEntity("a10", "Curator", "Add 5 books to the library", "COLLECTION_EXPLORATION", "RARE", 50, 5, 0, false, null, false),
+            AchievementEntity("a11", "Genre Explorer", "Read books from at least 3 distinct genres", "COLLECTION_EXPLORATION", "EPIC", 100, 3, 0, false, null, false),
+            AchievementEntity("a12", "Collector", "Add 20 books to the library", "COLLECTION_EXPLORATION", "LEGENDARY", 250, 20, 0, false, null, false)
+        )
+    }
 
-        val sessions = readingSessionDao.getAllSessionsSync()
-        val currentStreak = calculateCurrentStreak(sessions)
+    private suspend fun updateAchievementsSync(suppressXp: Boolean = false) {
+        database.withTransaction {
+            achievementDao.insertAll(getDefaultAchievements())
 
-        val achievements = achievementDao.getAllAchievementsSync()
-        for (ach in achievements) {
-            when (ach.id) {
-                "a2" -> { // Bookworm (100 pages)
-                    val unlocked = totalPagesRead >= 100
-                    achievementDao.updateAchievement(
-                        ach.copy(currentProgress = totalPagesRead, isUnlocked = unlocked)
-                    )
+            val allBooks = bookDao.getAllBooksSync()
+            val sessions = readingSessionDao.getAllSessionsSync()
+            val totalPagesRead = sessions.sumOf { it.pagesRead }
+            val completedBooks = allBooks.count { it.status == BookStatus.COMPLETED }
+            val currentStreak = calculateCurrentStreak(sessions)
+            val maxPagesInSession = sessions.maxOfOrNull { it.pagesRead } ?: 0
+
+            val nightOwlCount = sessions.count { session ->
+                val cal = Calendar.getInstance().apply { timeInMillis = session.date }
+                cal.get(Calendar.HOUR_OF_DAY) >= 22
+            }
+
+            val readBookIds = sessions.map { it.bookId }.toSet()
+            val readBooks = allBooks.filter { it.id in readBookIds || it.currentPage > 0 }
+            val distinctGenres = mutableSetOf<String>()
+            for (b in readBooks) {
+                if (!b.genre.isNullOrBlank()) {
+                    b.genre.split(",").map { it.trim().lowercase(Locale.getDefault()) }.filter { it.isNotBlank() }.forEach { distinctGenres.add(it) }
                 }
-                "a3" -> { // Getting Started (1 book completed)
-                    val unlocked = completedBooks >= 1
-                    achievementDao.updateAchievement(
-                        ach.copy(currentProgress = completedBooks, isUnlocked = unlocked)
-                    )
+            }
+            val distinctGenresCount = distinctGenres.size
+            val librarySize = allBooks.size
+
+            val achievements = achievementDao.getAllAchievementsSync()
+            var totalXpRewardToAdd = 0
+
+            for (ach in achievements) {
+                var progress = ach.currentProgress
+                var unlocked = ach.isUnlocked
+                var dateUnlocked = ach.dateUnlocked
+                var rewardClaimed = ach.rewardClaimed
+
+                when (ach.id) {
+                    "a1" -> { progress = completedBooks; unlocked = completedBooks >= 1 }
+                    "a2" -> { progress = totalPagesRead; unlocked = totalPagesRead >= 250 }
+                    "a5" -> { progress = totalPagesRead; unlocked = totalPagesRead >= 1000 }
+                    "a3" -> { progress = sessions.size; unlocked = sessions.isNotEmpty() }
+                    "a6" -> { progress = maxPagesInSession; unlocked = maxPagesInSession >= 50 }
+                    "a7" -> { progress = nightOwlCount; unlocked = nightOwlCount >= 1 }
+                    "a8" -> { progress = currentStreak; unlocked = currentStreak >= 3 }
+                    "a4" -> { progress = currentStreak; unlocked = currentStreak >= 7 }
+                    "a9" -> { progress = currentStreak; unlocked = currentStreak >= 14 }
+                    "a10" -> { progress = librarySize; unlocked = librarySize >= 5 }
+                    "a11" -> { progress = distinctGenresCount; unlocked = distinctGenresCount >= 3 }
+                    "a12" -> { progress = librarySize; unlocked = librarySize >= 20 }
                 }
-                "a4" -> { // Dedicated Reader (7 consecutive days)
-                    val unlocked = currentStreak >= 7
-                    achievementDao.updateAchievement(
-                        ach.copy(currentProgress = currentStreak, isUnlocked = unlocked)
+
+                if (unlocked && !rewardClaimed) {
+                    rewardClaimed = true
+                    dateUnlocked = ach.dateUnlocked ?: System.currentTimeMillis()
+                    if (!suppressXp) {
+                        totalXpRewardToAdd += ach.xpReward
+                    }
+                }
+
+                achievementDao.updateAchievement(
+                    ach.copy(
+                        currentProgress = progress,
+                        isUnlocked = unlocked,
+                        dateUnlocked = dateUnlocked,
+                        rewardClaimed = rewardClaimed
+                    )
+                )
+            }
+
+            if (!suppressXp && totalXpRewardToAdd > 0) {
+                val profile = userProfileDao.getUserProfileSync()
+                if (profile != null) {
+                    var xp = profile.currentXp + totalXpRewardToAdd
+                    var lvl = profile.level
+                    var maxXp = profile.maxXpForNextLevel
+                    while (xp >= maxXp) {
+                        xp -= maxXp
+                        lvl += 1
+                        maxXp += 100
+                    }
+                    userProfileDao.updateUserProfile(
+                        profile.copy(level = lvl, currentXp = xp, maxXpForNextLevel = maxXp)
                     )
                 }
             }

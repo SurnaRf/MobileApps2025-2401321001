@@ -4,5 +4,6 @@ data class Quest(
     val id: String,
     val title: String,
     val rewardXp: Int,
-    val isCompleted: Boolean
+    val isCompleted: Boolean,
+    val rewardClaimed: Boolean = false
 )

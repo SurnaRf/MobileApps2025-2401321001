@@ -9,7 +9,10 @@ import bg.uni_plovdiv.fmi.everquill.data.entity.Book
 import bg.uni_plovdiv.fmi.everquill.data.entity.BookStatus
 import bg.uni_plovdiv.fmi.everquill.data.entity.Quest
 import bg.uni_plovdiv.fmi.everquill.data.entity.UserProfile
+import bg.uni_plovdiv.fmi.everquill.data.repository.MonthlyStat
+import bg.uni_plovdiv.fmi.everquill.data.repository.ReadingInsights
 import bg.uni_plovdiv.fmi.everquill.data.repository.ReadingRepository
+import bg.uni_plovdiv.fmi.everquill.data.repository.WeeklyOverviewData
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -21,9 +24,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val books: StateFlow<List<Book>> = repository.books
     val quests: StateFlow<List<Quest>> = repository.quests
     val achievements: StateFlow<List<Achievement>> = repository.achievements
+    val allSessions: StateFlow<List<ReadingSessionEntity>> = repository.allSessions
 
     fun getSessionsForBook(bookId: String): Flow<List<ReadingSessionEntity>> {
         return repository.getSessionsForBook(bookId)
+    }
+
+    fun calculateCurrentStreak(sessions: List<ReadingSessionEntity>): Int {
+        return repository.calculateCurrentStreak(sessions)
+    }
+
+    fun calculateLongestStreak(sessions: List<ReadingSessionEntity>): Int {
+        return repository.calculateLongestStreak(sessions)
+    }
+
+    fun calculatePagesReadToday(sessions: List<ReadingSessionEntity>): Int {
+        return repository.calculatePagesReadToday(sessions)
+    }
+
+    fun calculateWeeklyOverview(sessions: List<ReadingSessionEntity>, dailyGoal: Int): WeeklyOverviewData {
+        return repository.calculateWeeklyOverview(sessions, dailyGoal)
+    }
+
+    fun calculateMonthlyStats(sessions: List<ReadingSessionEntity>): List<MonthlyStat> {
+        return repository.calculateMonthlyStats(sessions)
+    }
+
+    fun calculateGenreDistribution(books: List<Book>): Map<String, Int> {
+        return repository.calculateGenreDistribution(books)
+    }
+
+    fun calculateReadingInsights(sessions: List<ReadingSessionEntity>, books: List<Book>, dailyGoal: Int): ReadingInsights {
+        return repository.calculateReadingInsights(sessions, books, dailyGoal)
+    }
+
+    fun updateDailyGoal(newGoal: Int) {
+        viewModelScope.launch {
+            repository.updateDailyGoal(newGoal)
+        }
     }
 
     fun addBook(title: String, author: String, totalPages: Int, currentPage: Int, status: BookStatus) {

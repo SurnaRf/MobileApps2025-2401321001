@@ -3,6 +3,7 @@ package bg.uni_plovdiv.fmi.everquill.ui.navigation
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
@@ -29,6 +30,7 @@ import bg.uni_plovdiv.fmi.everquill.ui.screens.LibraryScreen
 import bg.uni_plovdiv.fmi.everquill.ui.screens.ReadingScreen
 import bg.uni_plovdiv.fmi.everquill.ui.screens.RecordSessionDialog
 import bg.uni_plovdiv.fmi.everquill.ui.screens.SearchBooksScreen
+import bg.uni_plovdiv.fmi.everquill.ui.screens.StatisticsScreen
 import bg.uni_plovdiv.fmi.everquill.viewmodel.MainViewModel
 
 sealed class Screen(val route: String, val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
@@ -36,6 +38,7 @@ sealed class Screen(val route: String, val title: String, val icon: androidx.com
     data object Library : Screen("library", "Library", Icons.Default.List)
     data object Reading : Screen("reading", "Reading", Icons.Default.Create)
     data object Achievements : Screen("achievements", "Achievements", Icons.Default.Star)
+    data object Statistics : Screen("statistics", "Stats", Icons.Default.Check)
 }
 
 @Composable
@@ -56,7 +59,8 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
         Screen.Home,
         Screen.Library,
         Screen.Reading,
-        Screen.Achievements
+        Screen.Achievements,
+        Screen.Statistics
     )
 
     Scaffold(
@@ -129,6 +133,9 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                         )
                         Screen.Achievements -> AchievementsScreen(
                             achievements = achievements
+                        )
+                        Screen.Statistics -> StatisticsScreen(
+                            userProfile = userProfile
                         )
                     }
                 }

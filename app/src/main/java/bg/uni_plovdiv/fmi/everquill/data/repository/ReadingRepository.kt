@@ -1,7 +1,6 @@
 package bg.uni_plovdiv.fmi.everquill.data.repository
 
 import android.content.Context
-import android.util.Log
 import bg.uni_plovdiv.fmi.everquill.data.database.AppDatabase
 import bg.uni_plovdiv.fmi.everquill.data.database.entity.BookEntity
 import bg.uni_plovdiv.fmi.everquill.data.database.entity.ReadingSessionEntity
@@ -19,7 +18,43 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
+
+data class DayReadingStat(
+    val dayName: String,
+    val dateEpoch: Long,
+    val pagesRead: Int,
+    val goalReached: Boolean
+)
+
+data class WeeklyOverviewData(
+    val days: List<DayReadingStat>,
+    val goalCompletedDaysCount: Int,
+    val totalPagesThisWeek: Int
+)
+
+data class MonthlyStat(
+    val monthKey: String,
+    val monthDisplayName: String,
+    val pagesRead: Int
+)
+
+data class ReadingInsights(
+    val totalBooksCompleted: Int,
+    val totalPagesRead: Int,
+    val totalSessions: Int,
+    val activeReadingDays: Int,
+    val averagePagesPerActiveDay: Float,
+    val averagePagesPerSession: Float,
+    val goalReachedDaysCount: Int,
+    val mostActiveDayOfWeek: String?,
+    val mostActiveMonth: String?,
+    val genreDistribution: Map<String, Int>
+)
 
 class ReadingRepository(context: Context) {
     private val database = AppDatabase.getDatabase(context)
@@ -47,8 +82,204 @@ class ReadingRepository(context: Context) {
         .map { entities -> entities.map { it.toDomain() } }
         .stateIn(externalScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val allSessions: StateFlow<List<ReadingSessionEntity>> = readingSessionDao.getAllSessions()
+        .stateIn(externalScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     fun getSessionsForBook(bookId: String): Flow<List<ReadingSessionEntity>> {
         return readingSessionDao.getSessionsForBook(bookId)
+    }
+
+    fun getCalendarDayEpoch(timestamp: Long): Long {
+        val cal = Calendar.getInstance().apply {
+            timeInMillis = timestamp
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        return cal.timeInMillis / 86400000L
+    }
+
+    fun calculateCurrentStreak(sessions: List<ReadingSessionEntity>): Int {
+        if (sessions.isEmpty()) return 0
+        val readingDays = sessions.map { getCalendarDayEpoch(it.date) }.toSet()
+        val today = getCalendarDayEpoch(System.currentTimeMillis())
+        val yesterday = today - 1
+
+        if (!readingDays.contains(today) && !readingDays.contains(yesterday)) {
+            return 0
+        }
+
+        var currentDay = if (readingDays.contains(today)) today else yesterday
+        var streak = 0
+        while (readingDays.contains(currentDay)) {
+            streak++
+            currentDay--
+        }
+        return streak
+    }
+
+    fun calculateLongestStreak(sessions: List<ReadingSessionEntity>): Int {
+        if (sessions.isEmpty()) return 0
+        val readingDays = sessions.map { getCalendarDayEpoch(it.date) }.toSet().sorted()
+        if (readingDays.isEmpty()) return 0
+
+        var maxStreak = 0
+        var currentStreak = 0
+        var expectedDay = -1L
+
+        for (day in readingDays) {
+            if (expectedDay == -1L || day == expectedDay + 1) {
+                currentStreak++
+            } else if (day > expectedDay + 1) {
+                currentStreak = 1
+            }
+            expectedDay = day
+            if (currentStreak > maxStreak) {
+                maxStreak = currentStreak
+            }
+        }
+        return maxStreak
+    }
+
+    fun calculatePagesReadToday(sessions: List<ReadingSessionEntity>): Int {
+        val todayEpoch = getCalendarDayEpoch(System.currentTimeMillis())
+        return sessions
+            .filter { getCalendarDayEpoch(it.date) == todayEpoch }
+            .sumOf { it.pagesRead }
+    }
+
+    fun calculateWeeklyOverview(sessions: List<ReadingSessionEntity>, dailyGoal: Int): WeeklyOverviewData {
+        val cal = Calendar.getInstance()
+        cal.timeInMillis = System.currentTimeMillis()
+        cal.firstDayOfWeek = Calendar.MONDAY
+        cal.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+
+        val dayNames = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+        val stats = mutableListOf<DayReadingStat>()
+        var goalCompletedCount = 0
+        var totalPages = 0
+
+        val sessionMap = sessions.groupBy { getCalendarDayEpoch(it.date) }
+
+        for (i in 0..6) {
+            val dayEpoch = cal.timeInMillis / 86400000L
+            val dayPages = sessionMap[dayEpoch]?.sumOf { it.pagesRead } ?: 0
+            val goalReached = dayPages >= dailyGoal
+            if (goalReached) goalCompletedCount++
+            totalPages += dayPages
+
+            stats.add(
+                DayReadingStat(
+                    dayName = dayNames[i],
+                    dateEpoch = dayEpoch,
+                    pagesRead = dayPages,
+                    goalReached = goalReached
+                )
+            )
+            cal.add(Calendar.DAY_OF_MONTH, 1)
+        }
+
+        return WeeklyOverviewData(
+            days = stats,
+            goalCompletedDaysCount = goalCompletedCount,
+            totalPagesThisWeek = totalPages
+        )
+    }
+
+    fun calculateMonthlyStats(sessions: List<ReadingSessionEntity>): List<MonthlyStat> {
+        val dateFormat = SimpleDateFormat("yyyy-MM", Locale.getDefault())
+        val displayFormat = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
+        val grouped = sessions.groupBy {
+            dateFormat.format(Date(it.date))
+        }
+        return grouped.entries.map { (key, list) ->
+            val date = dateFormat.parse(key) ?: Date()
+            MonthlyStat(
+                monthKey = key,
+                monthDisplayName = displayFormat.format(date),
+                pagesRead = list.sumOf { it.pagesRead }
+            )
+        }.sortedBy { it.monthKey }
+    }
+
+    fun calculateGenreDistribution(books: List<Book>): Map<String, Int> {
+        val genreCounts = mutableMapOf<String, Int>()
+        for (book in books) {
+            if (!book.genre.isNullOrBlank()) {
+                val genres = book.genre.split(",")
+                    .map { it.trim().lowercase(Locale.getDefault()).replaceFirstChar { c -> c.uppercase() } }
+                    .filter { it.isNotBlank() }
+                    .toSet() // each book counts at most once per normalized genre
+                for (genre in genres) {
+                    genreCounts[genre] = (genreCounts[genre] ?: 0) + 1
+                }
+            }
+        }
+        return genreCounts.entries.sortedByDescending { it.value }.associate { it.key to it.value }
+    }
+
+    fun calculateGoalReachedDaysCount(sessions: List<ReadingSessionEntity>, dailyGoal: Int): Int {
+        if (sessions.isEmpty()) return 0
+        val sessionMap = sessions.groupBy { getCalendarDayEpoch(it.date) }
+        return sessionMap.values.count { daySessions ->
+            daySessions.sumOf { it.pagesRead } >= dailyGoal
+        }
+    }
+
+    fun calculateMostActiveDayOfWeek(sessions: List<ReadingSessionEntity>): String? {
+        if (sessions.isEmpty()) return null
+        val dayNames = arrayOf("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+        val daySums = mutableMapOf<Int, Int>()
+        val cal = Calendar.getInstance()
+        for (session in sessions) {
+            cal.timeInMillis = session.date
+            val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
+            daySums[dayOfWeek] = (daySums[dayOfWeek] ?: 0) + session.pagesRead
+        }
+        val bestDay = daySums.maxByOrNull { it.value }?.key ?: return null
+        return dayNames[bestDay - 1]
+    }
+
+    fun calculateReadingInsights(sessions: List<ReadingSessionEntity>, books: List<Book>, dailyGoal: Int): ReadingInsights {
+        val totalBooksCompleted = books.count { it.status == BookStatus.COMPLETED }
+        val totalPagesRead = sessions.sumOf { it.pagesRead }
+        val totalSessions = sessions.size
+        val activeDaysSet = sessions.map { getCalendarDayEpoch(it.date) }.toSet()
+        val activeReadingDays = activeDaysSet.size
+
+        val avgPagesPerActiveDay = if (activeReadingDays > 0) totalPagesRead.toFloat() / activeReadingDays.toFloat() else 0f
+        val avgPagesPerSession = if (totalSessions > 0) totalPagesRead.toFloat() / totalSessions.toFloat() else 0f
+        val goalReachedDaysCount = calculateGoalReachedDaysCount(sessions, dailyGoal)
+        val mostActiveDayOfWeek = calculateMostActiveDayOfWeek(sessions)
+
+        val monthlyStats = calculateMonthlyStats(sessions)
+        val mostActiveMonth = monthlyStats.maxByOrNull { it.pagesRead }?.monthDisplayName
+        val genreDistribution = calculateGenreDistribution(books)
+
+        return ReadingInsights(
+            totalBooksCompleted = totalBooksCompleted,
+            totalPagesRead = totalPagesRead,
+            totalSessions = totalSessions,
+            activeReadingDays = activeReadingDays,
+            averagePagesPerActiveDay = avgPagesPerActiveDay,
+            averagePagesPerSession = avgPagesPerSession,
+            goalReachedDaysCount = goalReachedDaysCount,
+            mostActiveDayOfWeek = mostActiveDayOfWeek,
+            mostActiveMonth = mostActiveMonth,
+            genreDistribution = genreDistribution
+        )
+    }
+
+    suspend fun updateDailyGoal(newGoal: Int) {
+        withContext(Dispatchers.IO) {
+            val profile = userProfileDao.getUserProfileSync() ?: return@withContext
+            userProfileDao.updateUserProfile(profile.copy(dailyGoal = newGoal.coerceAtLeast(1)))
+        }
     }
 
     suspend fun addBook(
@@ -63,7 +294,6 @@ class ReadingRepository(context: Context) {
         publishYear: Int? = null
     ) {
         withContext(Dispatchers.IO) {
-            Log.d("BookMetadataDebug", "Repo addBook received publisher: $publisher, genre: $genre, publishYear: $publishYear")
             val clampedPage = currentPage.coerceIn(0, totalPages)
             val finalStatus = if (clampedPage >= totalPages && totalPages > 0) BookStatus.COMPLETED else status
             val newBook = BookEntity(
@@ -78,7 +308,6 @@ class ReadingRepository(context: Context) {
                 genre = genre,
                 publishYear = publishYear
             )
-            Log.d("BookMetadataDebug", "Saved BookEntity publisher: ${newBook.publisher}, genre: ${newBook.genre}, publishYear: ${newBook.publishYear}")
             bookDao.insertBook(newBook)
             updateAchievementsSync()
         }
@@ -143,9 +372,13 @@ class ReadingRepository(context: Context) {
                 )
             )
 
-            var profile = userProfileDao.getUserProfileSync() ?: UserProfileEntity(
-                id = 1, name = "Reader", level = 1, currentXp = 0, maxXpForNextLevel = 100, pagesReadToday = 0, streakDays = 1, lastReadingDate = System.currentTimeMillis()
+            val profile = userProfileDao.getUserProfileSync() ?: UserProfileEntity(
+                id = 1, name = "Reader", level = 1, currentXp = 0, maxXpForNextLevel = 100, pagesReadToday = 0, streakDays = 1, lastReadingDate = System.currentTimeMillis(), dailyGoal = 20
             )
+
+            val sessions = readingSessionDao.getAllSessionsSync()
+            val newPagesToday = calculatePagesReadToday(sessions)
+            val currentStreak = calculateCurrentStreak(sessions)
 
             var newXp = profile.currentXp + xpEarned
             var newLevel = profile.level
@@ -157,19 +390,20 @@ class ReadingRepository(context: Context) {
                 maxLevelXp += 100
             }
 
-            val newPagesToday = profile.pagesReadToday + actualPagesRead
-            profile = profile.copy(
-                level = newLevel,
-                currentXp = newXp,
-                maxXpForNextLevel = maxLevelXp,
-                pagesReadToday = newPagesToday
+            userProfileDao.updateUserProfile(
+                profile.copy(
+                    level = newLevel,
+                    currentXp = newXp,
+                    maxXpForNextLevel = maxLevelXp,
+                    pagesReadToday = newPagesToday,
+                    streakDays = currentStreak
+                )
             )
-            userProfileDao.updateUserProfile(profile)
 
             // Update quest q1 ("Read 20 pages today")
             val quest1 = questDao.getQuestById("q1")
             if (quest1 != null && !quest1.isCompleted) {
-                val updatedProgress = (quest1.currentProgress + actualPagesRead).coerceAtMost(quest1.targetPages)
+                val updatedProgress = newPagesToday.coerceAtMost(quest1.targetPages)
                 val isCompleted = updatedProgress >= quest1.targetPages
                 questDao.insertOrUpdateQuest(
                     quest1.copy(currentProgress = updatedProgress, isCompleted = isCompleted)
@@ -178,7 +412,7 @@ class ReadingRepository(context: Context) {
                     var xp = profile.currentXp + quest1.xpReward
                     var lvl = profile.level
                     var maxXp = profile.maxXpForNextLevel
-                    if (xp >= maxXp) {
+                    while (xp >= maxXp) {
                         xp -= maxXp
                         lvl += 1
                         maxXp += 100
@@ -222,6 +456,9 @@ class ReadingRepository(context: Context) {
         val totalPagesRead = allBooks.sumOf { it.currentPage }
         val completedBooks = allBooks.count { it.status == BookStatus.COMPLETED }
 
+        val sessions = readingSessionDao.getAllSessionsSync()
+        val currentStreak = calculateCurrentStreak(sessions)
+
         val achievements = achievementDao.getAllAchievementsSync()
         for (ach in achievements) {
             when (ach.id) {
@@ -235,6 +472,12 @@ class ReadingRepository(context: Context) {
                     val unlocked = completedBooks >= 1
                     achievementDao.updateAchievement(
                         ach.copy(currentProgress = completedBooks, isUnlocked = unlocked)
+                    )
+                }
+                "a4" -> { // Dedicated Reader (7 consecutive days)
+                    val unlocked = currentStreak >= 7
+                    achievementDao.updateAchievement(
+                        ach.copy(currentProgress = currentStreak, isUnlocked = unlocked)
                     )
                 }
             }

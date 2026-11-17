@@ -15,6 +15,8 @@ import bg.uni_plovdiv.fmi.everquill.data.entity.UserProfile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -87,6 +89,9 @@ class ReadingRepository(context: Context) {
 
     val allSessions: StateFlow<List<ReadingSessionEntity>> = readingSessionDao.getAllSessions()
         .stateIn(externalScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _newlyUnlockedAchievements = MutableSharedFlow<Achievement>(replay = 0, extraBufferCapacity = 64)
+    val newlyUnlockedAchievements: SharedFlow<Achievement> = _newlyUnlockedAchievements
 
     init {
         externalScope.launch {
@@ -478,7 +483,8 @@ class ReadingRepository(context: Context) {
     private fun getDefaultAchievements(): List<AchievementEntity> {
         return listOf(
             AchievementEntity("a1", "First Steps", "Complete your first book", "READING_MILESTONES", "COMMON", 25, 1, 0, false, null, false),
-            AchievementEntity("a2", "Page Turner", "Read 250 total pages", "READING_MILESTONES", "RARE", 50, 250, 0, false, null, false),
+            AchievementEntity("a2", "Bookworm", "Read 100 total pages", "READING_MILESTONES", "RARE", 50, 100, 0, false, null, false),
+            AchievementEntity("a13", "Page Turner", "Read 250 total pages", "READING_MILESTONES", "RARE", 50, 250, 0, false, null, false),
             AchievementEntity("a5", "Bibliophile", "Read 1,000 total pages", "READING_MILESTONES", "LEGENDARY", 250, 1000, 0, false, null, false),
             AchievementEntity("a3", "Getting Started", "Complete your first reading session", "READING_HABITS", "COMMON", 25, 1, 0, false, null, false),
             AchievementEntity("a6", "Marathon Reader", "Read at least 50 pages in a single reading session", "READING_HABITS", "RARE", 50, 50, 0, false, null, false),
@@ -524,30 +530,39 @@ class ReadingRepository(context: Context) {
 
             for (ach in achievements) {
                 var progress = ach.currentProgress
-                var unlocked = ach.isUnlocked
-                var dateUnlocked = ach.dateUnlocked
-                var rewardClaimed = ach.rewardClaimed
 
                 when (ach.id) {
-                    "a1" -> { progress = completedBooks; unlocked = completedBooks >= 1 }
-                    "a2" -> { progress = totalPagesRead; unlocked = totalPagesRead >= 250 }
-                    "a5" -> { progress = totalPagesRead; unlocked = totalPagesRead >= 1000 }
-                    "a3" -> { progress = sessions.size; unlocked = sessions.isNotEmpty() }
-                    "a6" -> { progress = maxPagesInSession; unlocked = maxPagesInSession >= 50 }
-                    "a7" -> { progress = nightOwlCount; unlocked = nightOwlCount >= 1 }
-                    "a8" -> { progress = currentStreak; unlocked = currentStreak >= 3 }
-                    "a4" -> { progress = currentStreak; unlocked = currentStreak >= 7 }
-                    "a9" -> { progress = currentStreak; unlocked = currentStreak >= 14 }
-                    "a10" -> { progress = librarySize; unlocked = librarySize >= 5 }
-                    "a11" -> { progress = distinctGenresCount; unlocked = distinctGenresCount >= 3 }
-                    "a12" -> { progress = librarySize; unlocked = librarySize >= 20 }
+                    "a1" -> progress = completedBooks
+                    "a2" -> progress = totalPagesRead
+                    "a13" -> progress = totalPagesRead
+                    "a5" -> progress = totalPagesRead
+                    "a3" -> progress = sessions.size
+                    "a6" -> progress = maxPagesInSession
+                    "a7" -> progress = nightOwlCount
+                    "a8" -> progress = currentStreak
+                    "a4" -> progress = currentStreak
+                    "a9" -> progress = currentStreak
+                    "a10" -> progress = librarySize
+                    "a11" -> progress = distinctGenresCount
+                    "a12" -> progress = librarySize
                 }
+
+                val unlocked = progress >= ach.requiredProgress
+                var dateUnlocked = ach.dateUnlocked
+                var rewardClaimed = ach.rewardClaimed
 
                 if (unlocked && !rewardClaimed) {
                     rewardClaimed = true
                     dateUnlocked = ach.dateUnlocked ?: System.currentTimeMillis()
                     if (!suppressXp) {
                         totalXpRewardToAdd += ach.xpReward
+                        val updatedAch = ach.copy(
+                            currentProgress = progress,
+                            isUnlocked = unlocked,
+                            dateUnlocked = dateUnlocked,
+                            rewardClaimed = rewardClaimed
+                        )
+                        _newlyUnlockedAchievements.tryEmit(updatedAch.toDomain())
                     }
                 }
 

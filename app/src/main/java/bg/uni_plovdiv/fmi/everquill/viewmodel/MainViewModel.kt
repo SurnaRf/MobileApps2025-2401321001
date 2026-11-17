@@ -14,6 +14,7 @@ import bg.uni_plovdiv.fmi.everquill.data.repository.ReadingInsights
 import bg.uni_plovdiv.fmi.everquill.data.repository.ReadingRepository
 import bg.uni_plovdiv.fmi.everquill.data.repository.WeeklyOverviewData
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
@@ -25,6 +26,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val quests: StateFlow<List<Quest>> = repository.quests
     val achievements: StateFlow<List<Achievement>> = repository.achievements
     val allSessions: StateFlow<List<ReadingSessionEntity>> = repository.allSessions
+    val newlyUnlockedAchievements: SharedFlow<Achievement> = repository.newlyUnlockedAchievements
 
     fun getSessionsForBook(bookId: String): Flow<List<ReadingSessionEntity>> {
         return repository.getSessionsForBook(bookId)

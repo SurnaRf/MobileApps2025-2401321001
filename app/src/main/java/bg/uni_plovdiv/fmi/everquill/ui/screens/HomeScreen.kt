@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -66,6 +67,7 @@ fun HomeScreen(
     onNavigateToLibrary: () -> Unit,
     onNavigateToReading: () -> Unit,
     onToggleQuest: (String) -> Unit,
+    onNavigateToSettings: () -> Unit,
     viewModel: MainViewModel = viewModel()
 ) {
     val scrollState = rememberScrollState()
@@ -106,18 +108,28 @@ fun HomeScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Favorite,
-                    contentDescription = "Botanical Logo",
-                    tint = MaterialTheme.colorScheme.primary
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onNavigateToSettings) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Settings",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Favorite,
+                        contentDescription = "Botanical Logo",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
         }
 

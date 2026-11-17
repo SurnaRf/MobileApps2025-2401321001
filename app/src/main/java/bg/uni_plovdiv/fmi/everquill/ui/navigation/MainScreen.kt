@@ -1,5 +1,6 @@
 package bg.uni_plovdiv.fmi.everquill.ui.navigation
 
+import android.content.Intent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -15,14 +16,19 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import bg.uni_plovdiv.fmi.everquill.SettingsActivity
+import bg.uni_plovdiv.fmi.everquill.data.entity.Achievement
 import bg.uni_plovdiv.fmi.everquill.ui.screens.AchievementsScreen
+import bg.uni_plovdiv.fmi.everquill.ui.screens.AchievementUnlockedDialog
 import bg.uni_plovdiv.fmi.everquill.ui.screens.AddBookDialog
 import bg.uni_plovdiv.fmi.everquill.ui.screens.BookDetailScreen
 import bg.uni_plovdiv.fmi.everquill.ui.screens.HomeScreen
@@ -31,6 +37,7 @@ import bg.uni_plovdiv.fmi.everquill.ui.screens.ReadingScreen
 import bg.uni_plovdiv.fmi.everquill.ui.screens.RecordSessionDialog
 import bg.uni_plovdiv.fmi.everquill.ui.screens.SearchBooksScreen
 import bg.uni_plovdiv.fmi.everquill.ui.screens.StatisticsScreen
+import bg.uni_plovdiv.fmi.everquill.util.generateBookShareText
 import bg.uni_plovdiv.fmi.everquill.viewmodel.MainViewModel
 
 sealed class Screen(val route: String, val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
@@ -43,6 +50,7 @@ sealed class Screen(val route: String, val title: String, val icon: androidx.com
 
 @Composable
 fun MainScreen(viewModel: MainViewModel = viewModel()) {
+    val context = LocalContext.current
     val userProfile by viewModel.userProfile.collectAsState()
     val books by viewModel.books.collectAsState()
     val quests by viewModel.quests.collectAsState()
@@ -54,6 +62,24 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
 
     var showAddBookDialog by remember { mutableStateOf(false) }
     var showRecordSessionDialog by remember { mutableStateOf(false) }
+
+    var achievementPopupQueue by remember { mutableStateOf<List<Achievement>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        viewModel.newlyUnlockedAchievements.collect { achievement ->
+            achievementPopupQueue = achievementPopupQueue + achievement
+        }
+    }
+
+    val currentAchievementPopup = achievementPopupQueue.firstOrNull()
+    if (currentAchievementPopup != null) {
+        AchievementUnlockedDialog(
+            achievement = currentAchievementPopup,
+            onContinue = {
+                achievementPopupQueue = achievementPopupQueue.drop(1)
+            }
+        )
+    }
 
     val screens = listOf(
         Screen.Home,
@@ -88,7 +114,7 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            val selectedBook = books.find { it.id == selectedBookId }
+            val selectedBook = books.find { book -> book.id == selectedBookId }
             when {
                 selectedBook != null -> BookDetailScreen(
                     book = selectedBook,
@@ -102,6 +128,15 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                     onDeleteBook = {
                         viewModel.deleteBook(selectedBook.id)
                         selectedBookId = null
+                    },
+                    onShareClick = {
+                        val shareText = generateBookShareText(selectedBook)
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, shareText)
+                        }
+                        val chooser = Intent.createChooser(intent, "Share book via")
+                        context.startActivity(chooser)
                     }
                 )
                 showSearchScreen -> SearchBooksScreen(
@@ -116,7 +151,11 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                             books = books,
                             onNavigateToLibrary = { currentScreen = Screen.Library },
                             onNavigateToReading = { currentScreen = Screen.Reading },
-                            onToggleQuest = { viewModel.toggleQuest(it) }
+                            onToggleQuest = { viewModel.toggleQuest(it) },
+                            onNavigateToSettings = {
+                                val intent = Intent(context, SettingsActivity::class.java)
+                                context.startActivity(intent)
+                            }
                         )
                         Screen.Library -> LibraryScreen(
                             books = books,

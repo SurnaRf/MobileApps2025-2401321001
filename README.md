@@ -49,7 +49,7 @@ ViewModel управлява състоянието на потребителс�
 1. Клонирай публичното GitHub хранилище:
 
    ```bash
-   git clone (https://github.com/SurnaRf/MobileApps2025-2401321001.git)
+   git clone https://github.com/SurnaRf/MobileApps2025-2401321001.git
    ```
 
 2. Отвори проекта в Android Studio.

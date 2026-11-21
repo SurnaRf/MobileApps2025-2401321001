@@ -21,6 +21,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -56,7 +57,15 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
     val quests by viewModel.quests.collectAsState()
     val achievements by viewModel.achievements.collectAsState()
 
-    var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
+    var currentScreenRoute by rememberSaveable { mutableStateOf(Screen.Home.route) }
+    val currentScreen = when (currentScreenRoute) {
+        Screen.Library.route -> Screen.Library
+        Screen.Reading.route -> Screen.Reading
+        Screen.Achievements.route -> Screen.Achievements
+        Screen.Statistics.route -> Screen.Statistics
+        else -> Screen.Home
+    }
+
     var showSearchScreen by remember { mutableStateOf(false) }
     var selectedBookId by remember { mutableStateOf<String?>(null) }
 
@@ -102,7 +111,7 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                             icon = { Icon(screen.icon, contentDescription = screen.title) },
                             label = { Text(screen.title) },
                             selected = currentScreen == screen,
-                            onClick = { currentScreen = screen }
+                            onClick = { currentScreenRoute = screen.route }
                         )
                     }
                 }
@@ -149,26 +158,31 @@ fun MainScreen(viewModel: MainViewModel = viewModel()) {
                             userProfile = userProfile,
                             quests = quests,
                             books = books,
-                            onNavigateToLibrary = { currentScreen = Screen.Library },
-                            onNavigateToReading = { currentScreen = Screen.Reading },
+                            onNavigateToLibrary = { currentScreenRoute = Screen.Library.route },
+                            onNavigateToReading = { currentScreenRoute = Screen.Reading.route },
                             onToggleQuest = { viewModel.toggleQuest(it) },
                             onNavigateToSettings = {
                                 val intent = Intent(context, SettingsActivity::class.java)
                                 context.startActivity(intent)
                             }
                         )
-                        Screen.Library -> LibraryScreen(
-                            books = books,
-                            onAddBookClick = { showAddBookDialog = true },
-                            onNavigateToSearch = { showSearchScreen = true },
-                            onBookClick = { book -> selectedBookId = book.id },
-                            onUpdateProgress = { bookId, page -> viewModel.updateBookProgress(bookId, page) }
-                        )
+                        Screen.Library -> {
+                            LaunchedEffect(Unit) {
+                                viewModel.markQuestCompleted("q2")
+                            }
+                            LibraryScreen(
+                                books = books,
+                                onAddBookClick = { showAddBookDialog = true },
+                                onNavigateToSearch = { showSearchScreen = true },
+                                onBookClick = { book -> selectedBookId = book.id },
+                                onUpdateProgress = { bookId, page -> viewModel.updateBookProgress(bookId, page) }
+                            )
+                        }
                         Screen.Reading -> ReadingScreen(
                             userProfile = userProfile,
                             books = books,
                             onRecordSessionClick = { showRecordSessionDialog = true },
-                            onNavigateToLibrary = { currentScreen = Screen.Library }
+                            onNavigateToLibrary = { currentScreenRoute = Screen.Library.route }
                         )
                         Screen.Achievements -> AchievementsScreen(
                             achievements = achievements

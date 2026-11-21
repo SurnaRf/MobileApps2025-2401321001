@@ -2,7 +2,6 @@ package bg.uni_plovdiv.fmi.everquill.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,9 +10,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.List
@@ -43,11 +42,13 @@ fun ReadingScreen(
     onRecordSessionClick: () -> Unit,
     onNavigateToLibrary: () -> Unit
 ) {
-    val activeBooks = books.filter { it.status == BookStatus.READING || it.status == BookStatus.TO_READ }
+    val activeBooks = books.filter { it.status == BookStatus.READING }
+    val scrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(scrollState)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -160,13 +161,13 @@ fun ReadingScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "No active books to read",
+                        text = "No books currently in progress.",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Add books to your library to track reading sessions.",
+                        text = "Start reading a book from your library to track reading sessions.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -178,14 +179,13 @@ fun ReadingScreen(
                 }
             }
         } else {
-            LazyColumn(
+            Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 80.dp)
+                    .fillMaxWidth()
+                    .padding(bottom = 80.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(activeBooks, key = { it.id }) { book ->
+                activeBooks.forEach { book ->
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),

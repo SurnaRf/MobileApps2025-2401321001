@@ -13,10 +13,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.List
@@ -59,6 +60,7 @@ fun LibraryScreen(
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf<BookStatus?>(null) } // null means All
+    val scrollState = rememberScrollState()
 
     val filteredBooks = books.filter { book ->
         val matchesSearch = book.title.contains(searchQuery, ignoreCase = true) ||
@@ -81,6 +83,7 @@ fun LibraryScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(scrollState)
                 .padding(innerPadding)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -152,8 +155,8 @@ fun LibraryScreen(
             if (filteredBooks.isEmpty()) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .weight(1f),
+                        .fillMaxWidth()
+                        .padding(vertical = 48.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
@@ -182,14 +185,13 @@ fun LibraryScreen(
                     }
                 }
             } else {
-                LazyColumn(
+                Column(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(bottom = 80.dp)
+                        .fillMaxWidth()
+                        .padding(bottom = 80.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(filteredBooks, key = { it.id }) { book ->
+                    filteredBooks.forEach { book ->
                         BookCard(book = book, onClick = { onBookClick(book) }, onUpdateProgress = onUpdateProgress)
                     }
                 }

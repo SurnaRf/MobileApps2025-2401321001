@@ -20,6 +20,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var themeManager: ThemePreferenceManager
     private var lastThemeMode: AppThemeMode = AppThemeMode.SYSTEM
 
+    companion object {
+        private var isSplashShown = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         themeManager = ThemePreferenceManager(this)
@@ -33,11 +37,14 @@ class MainActivity : ComponentActivity() {
                 AppThemeMode.SYSTEM -> isSystemInDarkTheme()
             }
 
-            var showSplash by remember { mutableStateOf(true) }
+            var showSplash by remember { mutableStateOf(!isSplashShown) }
 
             EverquillTheme(darkTheme = useDarkTheme) {
                 if (showSplash) {
-                    SplashScreen(onSplashFinished = { showSplash = false })
+                    SplashScreen(onSplashFinished = {
+                        isSplashShown = true
+                        showSplash = false
+                    })
                 } else {
                     MainScreen()
                 }

@@ -5,6 +5,7 @@ import androidx.room.withTransaction
 import bg.uni_plovdiv.fmi.everquill.data.database.AppDatabase
 import bg.uni_plovdiv.fmi.everquill.data.database.entity.AchievementEntity
 import bg.uni_plovdiv.fmi.everquill.data.database.entity.BookEntity
+import bg.uni_plovdiv.fmi.everquill.data.database.entity.QuestEntity
 import bg.uni_plovdiv.fmi.everquill.data.database.entity.ReadingSessionEntity
 import bg.uni_plovdiv.fmi.everquill.data.database.entity.UserProfileEntity
 import bg.uni_plovdiv.fmi.everquill.data.entity.Achievement
@@ -71,6 +72,8 @@ class ReadingRepository(context: Context) {
 
     private val externalScope = CoroutineScope(Dispatchers.IO)
 
+    var clockProvider: () -> Long = { System.currentTimeMillis() }
+
     val books: StateFlow<List<Book>> = bookDao.getAllBooks()
         .map { entities -> entities.map { it.toDomain() } }
         .stateIn(externalScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -95,6 +98,7 @@ class ReadingRepository(context: Context) {
 
     init {
         externalScope.launch {
+            updateQuestsSync(suppressXp = true)
             updateAchievementsSync(suppressXp = true)
         }
     }
@@ -117,7 +121,7 @@ class ReadingRepository(context: Context) {
     fun calculateCurrentStreak(sessions: List<ReadingSessionEntity>): Int {
         if (sessions.isEmpty()) return 0
         val readingDays = sessions.map { getCalendarDayEpoch(it.date) }.toSet()
-        val today = getCalendarDayEpoch(System.currentTimeMillis())
+        val today = getCalendarDayEpoch(clockProvider())
         val yesterday = today - 1
 
         if (!readingDays.contains(today) && !readingDays.contains(yesterday)) {
@@ -157,7 +161,7 @@ class ReadingRepository(context: Context) {
     }
 
     fun calculatePagesReadToday(sessions: List<ReadingSessionEntity>): Int {
-        val todayEpoch = getCalendarDayEpoch(System.currentTimeMillis())
+        val todayEpoch = getCalendarDayEpoch(clockProvider())
         return sessions
             .filter { getCalendarDayEpoch(it.date) == todayEpoch }
             .sumOf { it.pagesRead }
@@ -165,7 +169,7 @@ class ReadingRepository(context: Context) {
 
     fun calculateWeeklyOverview(sessions: List<ReadingSessionEntity>, dailyGoal: Int): WeeklyOverviewData {
         val cal = Calendar.getInstance()
-        cal.timeInMillis = System.currentTimeMillis()
+        cal.timeInMillis = clockProvider()
         cal.firstDayOfWeek = Calendar.MONDAY
         cal.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
         cal.set(Calendar.HOUR_OF_DAY, 0)
@@ -323,6 +327,7 @@ class ReadingRepository(context: Context) {
                 publishYear = publishYear
             )
             bookDao.insertBook(newBook)
+            updateQuestsSync(suppressXp = false)
             updateAchievementsSync(suppressXp = false)
         }
     }
@@ -334,6 +339,7 @@ class ReadingRepository(context: Context) {
             val newStatus = if (clampedPage >= book.totalPages && book.totalPages > 0) BookStatus.COMPLETED else book.status
             val updated = book.copy(currentPage = clampedPage, status = newStatus)
             bookDao.updateBook(updated)
+            updateQuestsSync(suppressXp = false)
             updateAchievementsSync(suppressXp = false)
         }
     }
@@ -350,6 +356,7 @@ class ReadingRepository(context: Context) {
                 status = status
             )
             bookDao.updateBook(updated)
+            updateQuestsSync(suppressXp = false)
             updateAchievementsSync(suppressXp = false)
         }
     }
@@ -358,6 +365,7 @@ class ReadingRepository(context: Context) {
         withContext(Dispatchers.IO) {
             val book = bookDao.getBookById(bookId) ?: return@withContext
             bookDao.deleteBook(book)
+            updateQuestsSync(suppressXp = false)
             updateAchievementsSync(suppressXp = false)
         }
     }
@@ -382,12 +390,13 @@ class ReadingRepository(context: Context) {
                     pagesRead = actualPagesRead,
                     startPage = startPage,
                     endPage = endPage,
+                    date = clockProvider(),
                     xpEarned = xpEarned
                 )
             )
 
             val profile = userProfileDao.getUserProfileSync() ?: UserProfileEntity(
-                id = 1, name = "Reader", level = 1, currentXp = 0, maxXpForNextLevel = 100, pagesReadToday = 0, streakDays = 1, lastReadingDate = System.currentTimeMillis(), dailyGoal = 20
+                id = 1, name = "Reader", level = 1, currentXp = 0, maxXpForNextLevel = 100, pagesReadToday = 0, streakDays = 1, lastReadingDate = clockProvider(), dailyGoal = 20
             )
 
             val sessions = readingSessionDao.getAllSessionsSync()
@@ -414,35 +423,14 @@ class ReadingRepository(context: Context) {
                 )
             )
 
-            // Update quest q1 ("Read 20 pages today")
-            val quest1 = questDao.getQuestById("q1")
-            if (quest1 != null && !quest1.isCompleted) {
-                val updatedProgress = newPagesToday.coerceAtMost(quest1.targetPages)
-                val isCompleted = updatedProgress >= quest1.targetPages
-                questDao.insertOrUpdateQuest(
-                    quest1.copy(currentProgress = updatedProgress, isCompleted = isCompleted)
-                )
-                if (isCompleted) {
-                    var xp = profile.currentXp + quest1.xpReward
-                    var lvl = profile.level
-                    var maxXp = profile.maxXpForNextLevel
-                    while (xp >= maxXp) {
-                        xp -= maxXp
-                        lvl += 1
-                        maxXp += 100
-                    }
-                    userProfileDao.updateUserProfile(
-                        profile.copy(level = lvl, currentXp = xp, maxXpForNextLevel = maxXp)
-                    )
-                }
-            }
-
+            updateQuestsSync(suppressXp = false)
             updateAchievementsSync(suppressXp = false)
         }
     }
 
     suspend fun toggleQuest(questId: String) {
         database.withTransaction {
+            val todayEpoch = getCalendarDayEpoch(clockProvider())
             val quest = questDao.getQuestById(questId) ?: return@withTransaction
             val newState = !quest.isCompleted
 
@@ -457,45 +445,140 @@ class ReadingRepository(context: Context) {
             val updatedQuest = quest.copy(
                 isCompleted = newState,
                 rewardClaimed = newRewardClaimed,
+                lastCompletedDateEpoch = if (newState) todayEpoch else quest.lastCompletedDateEpoch,
+                lastRewardedDateEpoch = if (newRewardClaimed) todayEpoch else quest.lastRewardedDateEpoch,
                 currentProgress = if (newState) quest.targetPages else quest.currentProgress
             )
             questDao.insertOrUpdateQuest(updatedQuest)
 
             if (shouldAwardXp) {
-                val profile = userProfileDao.getUserProfileSync()
-                if (profile != null) {
-                    var xp = profile.currentXp + quest.xpReward
-                    var lvl = profile.level
-                    var maxXp = profile.maxXpForNextLevel
-                    while (xp >= maxXp) {
-                        xp -= maxXp
-                        lvl += 1
-                        maxXp += 100
-                    }
-                    userProfileDao.updateUserProfile(
-                        profile.copy(level = lvl, currentXp = xp, maxXpForNextLevel = maxXp)
+                awardXpForQuest(quest.xpReward)
+            }
+        }
+    }
+
+    suspend fun markQuestCompleted(questId: String) {
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                val todayEpoch = getCalendarDayEpoch(clockProvider())
+                val quest = questDao.getQuestById(questId) ?: return@withTransaction
+                if (questId == "q2") {
+                    val alreadyRewarded = quest.lastRewardedDateEpoch == todayEpoch
+                    val updated = quest.copy(
+                        isCompleted = true,
+                        currentProgress = quest.targetPages,
+                        rewardClaimed = true,
+                        lastCompletedDateEpoch = todayEpoch,
+                        lastRewardedDateEpoch = todayEpoch
                     )
+                    questDao.insertOrUpdateQuest(updated)
+
+                    if (!alreadyRewarded) {
+                        awardXpForQuest(quest.xpReward)
+                    }
                 }
             }
         }
     }
 
-    private fun getDefaultAchievements(): List<AchievementEntity> {
-        return listOf(
-            AchievementEntity("a1", "First Steps", "Complete your first book", "READING_MILESTONES", "COMMON", 25, 1, 0, false, null, false),
-            AchievementEntity("a2", "Bookworm", "Read 100 total pages", "READING_MILESTONES", "RARE", 50, 100, 0, false, null, false),
-            AchievementEntity("a13", "Page Turner", "Read 250 total pages", "READING_MILESTONES", "RARE", 50, 250, 0, false, null, false),
-            AchievementEntity("a5", "Bibliophile", "Read 1,000 total pages", "READING_MILESTONES", "LEGENDARY", 250, 1000, 0, false, null, false),
-            AchievementEntity("a3", "Getting Started", "Complete your first reading session", "READING_HABITS", "COMMON", 25, 1, 0, false, null, false),
-            AchievementEntity("a6", "Marathon Reader", "Read at least 50 pages in a single reading session", "READING_HABITS", "RARE", 50, 50, 0, false, null, false),
-            AchievementEntity("a7", "Night Owl", "Complete a reading session starting at or after 22:00", "READING_HABITS", "RARE", 50, 1, 0, false, null, false),
-            AchievementEntity("a8", "Consistent Reader", "Maintain a 3-day reading streak", "DEDICATION", "COMMON", 25, 3, 0, false, null, false),
-            AchievementEntity("a4", "Dedicated Reader", "Maintain a 7-day reading streak", "DEDICATION", "EPIC", 100, 7, 0, false, null, false),
-            AchievementEntity("a9", "Committed Scholar", "Maintain a 14-day reading streak", "DEDICATION", "LEGENDARY", 250, 14, 0, false, null, false),
-            AchievementEntity("a10", "Curator", "Add 5 books to the library", "COLLECTION_EXPLORATION", "RARE", 50, 5, 0, false, null, false),
-            AchievementEntity("a11", "Genre Explorer", "Read books from at least 3 distinct genres", "COLLECTION_EXPLORATION", "EPIC", 100, 3, 0, false, null, false),
-            AchievementEntity("a12", "Collector", "Add 20 books to the library", "COLLECTION_EXPLORATION", "LEGENDARY", 250, 20, 0, false, null, false)
+    private suspend fun awardXpForQuest(xpReward: Int) {
+        val profile = userProfileDao.getUserProfileSync() ?: return
+        var xp = profile.currentXp + xpReward
+        var lvl = profile.level
+        var maxXp = profile.maxXpForNextLevel
+        while (xp >= maxXp) {
+            xp -= maxXp
+            lvl += 1
+            maxXp += 100
+        }
+        userProfileDao.updateUserProfile(
+            profile.copy(level = lvl, currentXp = xp, maxXpForNextLevel = maxXp)
         )
+    }
+
+    private suspend fun updateQuestsSync(suppressXp: Boolean = false) {
+        database.withTransaction {
+            val todayEpoch = getCalendarDayEpoch(clockProvider())
+            val sessions = readingSessionDao.getAllSessionsSync()
+            val pagesToday = calculatePagesReadToday(sessions)
+
+            // 1. Sync q1 ("Read 20 pages today")
+            val q1 = questDao.getQuestById("q1") ?: QuestEntity(
+                id = "q1",
+                title = "Read 20 pages today",
+                description = "Read at least 20 pages in your active books",
+                targetPages = 20,
+                currentProgress = 0,
+                xpReward = 50,
+                date = clockProvider(),
+                isCompleted = false,
+                rewardClaimed = false,
+                lastCompletedDateEpoch = 0L,
+                lastRewardedDateEpoch = 0L
+            )
+
+            val q1Completed = pagesToday >= q1.targetPages
+            val q1LastCompletedEpoch = if (q1Completed) todayEpoch else if (q1.lastCompletedDateEpoch == todayEpoch) q1.lastCompletedDateEpoch else 0L
+
+            var q1RewardClaimed = q1.rewardClaimed
+            var q1LastRewardedEpoch = q1.lastRewardedDateEpoch
+            if (q1LastRewardedEpoch < todayEpoch) {
+                q1RewardClaimed = false
+            }
+
+            var awardXpForQ1 = false
+            if (q1Completed && !q1RewardClaimed && q1LastRewardedEpoch < todayEpoch) {
+                q1RewardClaimed = true
+                q1LastRewardedEpoch = todayEpoch
+                if (!suppressXp) {
+                    awardXpForQ1 = true
+                }
+            }
+
+            val updatedQ1 = q1.copy(
+                currentProgress = pagesToday.coerceAtMost(q1.targetPages),
+                isCompleted = q1Completed,
+                rewardClaimed = q1RewardClaimed,
+                lastCompletedDateEpoch = q1LastCompletedEpoch,
+                lastRewardedDateEpoch = q1LastRewardedEpoch
+            )
+            questDao.insertOrUpdateQuest(updatedQ1)
+
+            // 2. Sync q2 ("Open your library journal")
+            val q2 = questDao.getQuestById("q2") ?: QuestEntity(
+                id = "q2",
+                title = "Open your library journal",
+                description = "Explore your library collection",
+                targetPages = 1,
+                currentProgress = 0,
+                xpReward = 20,
+                date = clockProvider(),
+                isCompleted = false,
+                rewardClaimed = false,
+                lastCompletedDateEpoch = 0L,
+                lastRewardedDateEpoch = 0L
+            )
+
+            val q2Completed = q2.lastCompletedDateEpoch == todayEpoch
+            var q2RewardClaimed = q2.rewardClaimed
+            var q2LastRewardedEpoch = q2.lastRewardedDateEpoch
+            if (q2LastRewardedEpoch < todayEpoch) {
+                q2RewardClaimed = false
+            }
+
+            val updatedQ2 = q2.copy(
+                currentProgress = if (q2Completed) 1 else 0,
+                isCompleted = q2Completed,
+                rewardClaimed = q2RewardClaimed,
+                lastCompletedDateEpoch = if (q2Completed) q2.lastCompletedDateEpoch else 0L,
+                lastRewardedDateEpoch = q2LastRewardedEpoch
+            )
+            questDao.insertOrUpdateQuest(updatedQ2)
+
+            if (awardXpForQ1) {
+                awardXpForQuest(q1.xpReward)
+            }
+        }
     }
 
     private suspend fun updateAchievementsSync(suppressXp: Boolean = false) {
@@ -553,7 +636,7 @@ class ReadingRepository(context: Context) {
 
                 if (unlocked && !rewardClaimed) {
                     rewardClaimed = true
-                    dateUnlocked = ach.dateUnlocked ?: System.currentTimeMillis()
+                    dateUnlocked = ach.dateUnlocked ?: clockProvider()
                     if (!suppressXp) {
                         totalXpRewardToAdd += ach.xpReward
                         val updatedAch = ach.copy(
@@ -593,5 +676,23 @@ class ReadingRepository(context: Context) {
                 }
             }
         }
+    }
+
+    private fun getDefaultAchievements(): List<AchievementEntity> {
+        return listOf(
+            AchievementEntity("a1", "First Steps", "Complete your first book", "READING_MILESTONES", "COMMON", 25, 1, 0, false, null, false),
+            AchievementEntity("a2", "Bookworm", "Read 100 total pages", "READING_MILESTONES", "RARE", 50, 100, 0, false, null, false),
+            AchievementEntity("a13", "Page Turner", "Read 250 total pages", "READING_MILESTONES", "RARE", 50, 250, 0, false, null, false),
+            AchievementEntity("a5", "Bibliophile", "Read 1,000 total pages", "READING_MILESTONES", "LEGENDARY", 250, 1000, 0, false, null, false),
+            AchievementEntity("a3", "Getting Started", "Complete your first reading session", "READING_HABITS", "COMMON", 25, 1, 0, false, null, false),
+            AchievementEntity("a6", "Marathon Reader", "Read at least 50 pages in a single reading session", "READING_HABITS", "RARE", 50, 50, 0, false, null, false),
+            AchievementEntity("a7", "Night Owl", "Complete a reading session starting at or after 22:00", "READING_HABITS", "RARE", 50, 1, 0, false, null, false),
+            AchievementEntity("a8", "Consistent Reader", "Maintain a 3-day reading streak", "DEDICATION", "COMMON", 25, 3, 0, false, null, false),
+            AchievementEntity("a4", "Dedicated Reader", "Maintain a 7-day reading streak", "DEDICATION", "EPIC", 100, 7, 0, false, null, false),
+            AchievementEntity("a9", "Committed Scholar", "Maintain a 14-day reading streak", "DEDICATION", "LEGENDARY", 250, 14, 0, false, null, false),
+            AchievementEntity("a10", "Curator", "Add 5 books to the library", "COLLECTION_EXPLORATION", "RARE", 50, 5, 0, false, null, false),
+            AchievementEntity("a11", "Genre Explorer", "Read books from at least 3 distinct genres", "COLLECTION_EXPLORATION", "EPIC", 100, 3, 0, false, null, false),
+            AchievementEntity("a12", "Collector", "Add 20 books to the library", "COLLECTION_EXPLORATION", "LEGENDARY", 250, 20, 0, false, null, false)
+        )
     }
 }

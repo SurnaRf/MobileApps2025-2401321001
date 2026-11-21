@@ -101,4 +101,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repository.toggleQuest(questId)
         }
     }
+
+    fun markQuestCompleted(questId: String) {
+        viewModelScope.launch {
+            repository.markQuestCompleted(questId)
+        }
+    }
 }
